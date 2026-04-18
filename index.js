@@ -1610,10 +1610,13 @@ function normalizePromptModel(model) {
 async function generateImage(prompt, options = {}) {
   const s = settings();
   validateProviderSettings(s);
-  if (!await shouldUseProxy(s)) {
-    return directGenerateImage(prompt, options);
+  if (await shouldUseProxy(s)) {
+    return proxyGenerateImage(prompt, options);
   }
-  return proxyGenerateImage(prompt, options);
+  if (s.apiSecretId && !getBrowserApiKey()) {
+    throw new Error('图片密钥已保存到酒馆密钥库，但插件代理当前不可用；手机端不会回退到浏览器直连，请检查后端代理是否启用。');
+  }
+  return directGenerateImage(prompt, options);
 }
 
 async function proxyGenerateImage(prompt, options = {}) {
@@ -1628,11 +1631,34 @@ async function proxyGenerateImage(prompt, options = {}) {
 
   if (s.responseFormat) payload.response_format = s.responseFormat;
 
-  const result = await proxyPost('/images/generations', {
-    baseUrl: s.baseUrl,
-    apiSecretKey: IMAGE_SECRET_KEY,
-    apiSecretId: s.apiSecretId,
+  appendDebugLog('图片生成请求', {
+    model: s.model,
+    transport: 'plugin_proxy_image_key',
+    trigger: generationRequest.trigger,
     payload,
+  });
+
+  let result;
+  try {
+    result = await proxyPost('/images/generations', {
+      baseUrl: s.baseUrl,
+      apiSecretKey: IMAGE_SECRET_KEY,
+      apiSecretId: s.apiSecretId,
+      payload,
+    });
+  } catch (error) {
+    appendDebugLog('图片生成失败', {
+      model: s.model,
+      transport: 'plugin_proxy_image_key',
+      message: error.message,
+    });
+    throw error;
+  }
+
+  appendDebugLog('图片生成返回', {
+    model: s.model,
+    transport: 'plugin_proxy_image_key',
+    imageCount: Array.isArray(result?.images) ? result.images.length : Array.isArray(result?.data) ? result.data.length : 0,
   });
 
   return {
@@ -1650,7 +1676,7 @@ function validateProviderSettings(s) {
 }
 
 async function shouldUseProxy(s = settings()) {
-  return Boolean(s.apiSecretId && await isProxyAvailable());
+  return Boolean(s.apiSecretId && await isProxyAvailable(true));
 }
 
 async function directGenerateImage(prompt, options = {}) {
@@ -1669,14 +1695,37 @@ async function directGenerateImage(prompt, options = {}) {
 
   if (s.responseFormat) payload.response_format = s.responseFormat;
 
-  const data = await directJson(`${root}/v1/images/generations`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+  appendDebugLog('图片生成请求', {
+    model: s.model,
+    transport: 'browser_direct_image_key',
+    trigger: generationRequest.trigger,
+    payload,
+  });
+
+  let data;
+  try {
+    data = await directJson(`${root}/v1/images/generations`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    appendDebugLog('图片生成失败', {
+      model: s.model,
+      transport: 'browser_direct_image_key',
+      message: error.message,
+    });
+    throw error;
+  }
+
+  appendDebugLog('图片生成返回', {
+    model: s.model,
+    transport: 'browser_direct_image_key',
+    imageCount: Array.isArray(data?.data) ? data.data.length : 0,
   });
 
   return {
