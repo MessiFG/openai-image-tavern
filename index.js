@@ -36,6 +36,7 @@ import {
 let proxyAvailableCache = null;
 let activeMemoryTableKey = 'registry';
 let autoTriggerRunning = false;
+const processedTagMessageIds = new Set();
 
 function settings() {
   if (!extension_settings[EXTENSION_NAME]) {
@@ -2454,12 +2455,32 @@ function extractTagPrompt(text) {
   return match?.[1]?.trim() || '';
 }
 
-async function onMessageRendered(messageId) {
+function resolveMessageEvent(messageOrId) {
+  if (typeof messageOrId === 'number' || typeof messageOrId === 'string') {
+    const messageId = Number(messageOrId);
+    return {
+      messageId,
+      message: Number.isFinite(messageId) ? chat?.[messageId] : null,
+    };
+  }
+  if (messageOrId && typeof messageOrId === 'object') {
+    const messageId = chat?.findIndex(message => message === messageOrId);
+    return {
+      messageId,
+      message: messageId >= 0 ? messageOrId : null,
+    };
+  }
+  return { messageId: -1, message: null };
+}
+
+async function onMessageRendered(messageOrId) {
   const s = settings();
   if (!s.enabled) return;
-  const message = chat?.[messageId];
+  const { messageId, message } = resolveMessageEvent(messageOrId);
+  if (!message || messageId < 0) return;
   const prompt = extractTagPrompt(message?.mes || '');
-  if (s.autoConfirmTagTrigger && prompt) {
+  if (s.autoConfirmTagTrigger && prompt && !processedTagMessageIds.has(messageId)) {
+    processedTagMessageIds.add(messageId);
     try {
       await handleGenerate(prompt, { triggerType: 'tag', triggerSource: 'user_intent', messageId });
     } catch (error) {
@@ -2960,8 +2981,12 @@ jQuery(async () => {
   scheduleRestoreChatShellCentering();
   scheduleCleanupLegacyGeneratedMedia();
   eventSource.on(event_types.MESSAGE_RECEIVED, onMessageRendered);
+  if (event_types.CHARACTER_MESSAGE_RENDERED) {
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onMessageRendered);
+  }
   eventSource.on(event_types.CHAT_CHANGED, () => {
     setTimeout(() => {
+      processedTagMessageIds.clear();
       renderPanel();
       addChatMenu();
       addCharacterRegistryTopBar();
