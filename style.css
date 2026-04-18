@@ -547,14 +547,14 @@
   #oit_table_database_settings_drawer {
     align-items: flex-start;
     justify-content: center;
-    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+    padding: 8px;
     overflow: hidden;
   }
 
   .oit-memory-drawer-content {
     width: calc(100vw - 16px);
-    height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
-    max-height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
     border-radius: 10px;
   }
 
