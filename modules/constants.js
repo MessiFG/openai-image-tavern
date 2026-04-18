@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS = {
   n: 1,
   responseFormat: 'url',
   stylePreset: 'Japanese anime style, clean line art, expressive character design, vibrant colors, cinematic lighting',
-  safeMode: true,
+  safeMode: false,
   keywordTriggers: '文生图,/image',
   autoConfirmTagTrigger: true,
   autoGenerateEnabled: false,

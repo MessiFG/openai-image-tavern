@@ -961,7 +961,7 @@ function buildGenerationRequest(userPrompt, options = {}) {
       continuityMode: s.continuityMode || 'smart',
       detectSceneTransition: Boolean(s.detectSceneTransition),
       continuityPolicy: {
-        defaultAction: s.continuityMode === 'force' ? 'inherit_previous_image' : 'inherit_unless_clear_scene_transition',
+        defaultAction: s.continuityMode === 'force' ? 'use_current_visual_state' : 'use_current_visual_state_unless_clear_scene_transition',
         transitionOnlyWhen: 'location, time period, scene goal, or cast clearly changes; do not treat emotion, pose, dialogue, or small action changes as a scene transition',
         preserveFields: ['character identity', 'base appearance', 'current outfit', 'scene layout', 'lighting mood', 'camera language', 'visual style'],
       },
@@ -1017,7 +1017,7 @@ function buildContinuityAnchor(generationRequest, continuityPlan = null) {
     ? Object.values(lastImage.anchors).filter(Boolean).join(', ')
     : '';
   const parts = [
-    lastImage.summary ? `previous image: ${lastImage.summary}` : '',
+    lastImage.summary ? `established visual state: ${lastImage.summary}` : '',
     anchors ? `locked visual anchors: ${anchors}` : '',
     registryText.length ? `character registry: ${registryText.join(' | ')}` : '',
     charactersCache.length ? `character continuity: ${charactersCache.join(' | ')}` : '',
@@ -1025,7 +1025,7 @@ function buildContinuityAnchor(generationRequest, continuityPlan = null) {
     lastImage.continuityTags?.length ? `continuity tags: ${lastImage.continuityTags.join(', ')}` : '',
   ].filter(Boolean);
   if (!parts.length) return '';
-  return `Continuity anchor: inherit the previous generated image unless explicitly contradicted. Preserve identity, outfit, scene layout, lighting mood, camera language, and visual style. ${truncateText(parts.join(' '), 1200)}`;
+  return `Continuity anchor: use the current visual state unless explicitly contradicted. Preserve identity, outfit, scene layout, lighting mood, camera language, and visual style. ${truncateText(parts.join(' '), 1200)}`;
 }
 
 function buildLocalPromptPreview(userPrompt, generationRequest = null, continuityPlan = null) {
@@ -1384,7 +1384,7 @@ function buildContinuityMessages(generationRequest) {
       content: [
         'You are an image continuity planner for a SillyTavern image generation extension.',
         'Return strict JSON only. No markdown.',
-        'Decide whether the new image should inherit the previous generated image state.',
+        'Decide whether the new image should use the current visual state.',
         'Default to continuity: keep transitionFromPrevious false unless the recent chat clearly changes location, time period, scene goal, or cast.',
         'Do not mark a transition for normal dialogue, emotional changes, pose changes, clothing details, or small actions inside the same scene.',
         'When transitionFromPrevious is false, finalPrompt must explicitly include stable character identity, base appearance, outfit, scene layout, lighting mood, camera language, and visual style from cache.lastImage/cache.characters/cache.scene.',
