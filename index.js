@@ -967,7 +967,7 @@ function buildGenerationRequest(userPrompt, options = {}) {
       },
       constraints: [
         'preserve character identity',
-        'preserve scene continuity when the scene is not transitioning',
+        'preserve scene consistency when the scene is not transitioning',
         'avoid text, watermark, captions, speech bubbles',
         ...(s.safeMode !== false ? ['safety mode: produce a non-explicit prompt suitable for mainstream image APIs; convert explicit source context into safe cinematic wording'] : []),
       ],
@@ -983,7 +983,7 @@ function buildGenerationRequest(userPrompt, options = {}) {
 }
 
 function safeModeInstruction() {
-  return 'Safety mode is enabled: write a non-explicit image prompt suitable for mainstream image APIs. Avoid nudity, pornographic framing, explicit sexual wording, minors, coercion, graphic violence, gore, hate symbols, and illegal acts. If the source context is explicit, reinterpret it as a safe cinematic or suggestive composition while preserving character identity, scene continuity, mood, and story intent.';
+  return 'Safety mode is enabled: write a non-explicit image prompt suitable for mainstream image APIs. Avoid nudity, pornographic framing, explicit sexual wording, minors, coercion, graphic violence, gore, hate symbols, and illegal acts. If the source context is explicit, reinterpret it as a safe cinematic or suggestive composition while preserving character identity, scene consistency, mood, and story intent.';
 }
 
 function buildContinuityAnchor(generationRequest, continuityPlan = null) {
@@ -1017,15 +1017,19 @@ function buildContinuityAnchor(generationRequest, continuityPlan = null) {
     ? Object.values(lastImage.anchors).filter(Boolean).join(', ')
     : '';
   const parts = [
-    lastImage.summary ? `established visual state: ${lastImage.summary}` : '',
-    anchors ? `locked visual anchors: ${anchors}` : '',
-    registryText.length ? `character registry: ${registryText.join(' | ')}` : '',
-    charactersCache.length ? `character continuity: ${charactersCache.join(' | ')}` : '',
-    scene.summary || scene.location ? `scene continuity: ${scene.summary || scene.location}` : '',
-    lastImage.continuityTags?.length ? `continuity tags: ${lastImage.continuityTags.join(', ')}` : '',
+    lastImage.summary ? `Established look: ${lastImage.summary}` : '',
+    anchors ? `Stable visual details: ${anchors}` : '',
+    registryText.length ? `Stable cast details: ${registryText.join(' | ')}` : '',
+    charactersCache.length ? `Active cast details: ${charactersCache.join(' | ')}` : '',
+    scene.summary || scene.location ? `Scene details: ${scene.summary || scene.location}` : '',
+    lastImage.continuityTags?.length ? `Visual tags: ${lastImage.continuityTags.join(', ')}` : '',
   ].filter(Boolean);
   if (!parts.length) return '';
-  return `Continuity anchor: use the current visual state unless explicitly contradicted. Preserve identity, outfit, scene layout, lighting mood, camera language, and visual style. ${truncateText(parts.join(' '), 1200)}`;
+  return `Keep the established look consistent: character identity, outfit, scene setting, lighting mood, camera framing, and overall art style. ${truncateText(parts.join(' '), 1200)}`;
+}
+
+function compactPromptText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
 function buildLocalPromptPreview(userPrompt, generationRequest = null, continuityPlan = null) {
@@ -1046,13 +1050,13 @@ function buildLocalPromptPreview(userPrompt, generationRequest = null, continuit
     `Visual style: ${String(s.stylePreset || DEFAULT_SETTINGS.stylePreset).trim()}`,
     safeMode ? safeModeInstruction() : '',
     buildContinuityAnchor(generationRequest, continuityPlan),
-    continuityPlan?.finalPrompt ? `Use this refined visual plan:\n${continuityPlan.finalPrompt}` : '',
+    continuityPlan?.finalPrompt ? `Final image plan:\n${continuityPlan.finalPrompt}` : '',
     characterText ? `Character card / appearance source:\n${characterText}` : '',
-    profile.state ? `Current visual state: ${profile.state}` : '',
-    scene.summary || scene.location ? `Cached scene memory:\n${JSON.stringify(scene)}` : '',
-    shouldUseLastImage ? `Previous generated image state to preserve:\n${JSON.stringify(lastImage)}` : '',
+    profile.state ? `Visible character state: ${profile.state}` : '',
+    scene.summary || scene.location ? `Scene notes:\n${JSON.stringify(scene)}` : '',
+    shouldUseLastImage ? `Established image details to keep:\n${JSON.stringify(lastImage)}` : '',
     recentContext ? `Recent chat context:\n${recentContext}` : '',
-    'Keep the character identity, appearance, outfit continuity, scene mood, and latest action consistent. Do not render text, watermark, UI, speech bubbles, or captions.',
+    'Keep character identity, appearance, outfit, scene mood, and latest action consistent. Do not render text, watermark, UI, speech bubbles, or captions.',
   ].filter(Boolean);
   return parts.join('\n');
 }
@@ -1574,9 +1578,9 @@ async function composeImagePrompt(userPrompt, options = {}) {
   const continuityPlan = await requestContinuityPlan(generationRequest, userPrompt);
   const rawPrompt = continuityPlan.finalPrompt || buildLocalPromptPreview(userPrompt, generationRequest, continuityPlan);
   const continuityAnchor = buildContinuityAnchor(generationRequest, continuityPlan);
-  const finalPrompt = continuityAnchor && continuityPlan.finalPrompt
-    ? `${continuityAnchor}\n\n${rawPrompt}`
-    : rawPrompt;
+  const finalPrompt = compactPromptText(continuityAnchor && continuityPlan.finalPrompt
+    ? `${continuityAnchor} ${rawPrompt}`
+    : rawPrompt);
   const nextCache = continuityPlan.updatedCache || {};
   generationRequest.cache = {
     scene: nextCache.scene || generationRequest.cache.scene || emptySceneCache(),
