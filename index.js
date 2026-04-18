@@ -367,7 +367,6 @@ function getChatCache() {
 function imageTrackKey(triggerSource = 'current_scene', triggerType = '') {
   if (triggerSource === 'last_reply') return 'lastReply';
   if (triggerSource === 'user_intent') return 'manualIntent';
-  if (String(triggerType || '').startsWith('auto')) return 'autoContext';
   return 'currentContext';
 }
 

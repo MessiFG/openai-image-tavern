@@ -163,12 +163,11 @@
 
 上一张图缓存按轨道隔离：
 
-- `currentContext`：`current_scene` 使用。
+- `currentContext`：`current_scene` 使用，包含手动当前场景和自动触发。
 - `lastReply`：`last_reply` 使用。
 - `manualIntent`：`user_intent` 使用。
-- `autoContext`：自动触发使用。
 
-轨道隔离用于避免不同触发方式互相污染上一张图摘要和连贯锚点。
+轨道隔离用于避免不同生图语义互相污染上一张图摘要和连贯锚点；自动触发属于当前场景语义，所以与手动当前场景共用 `currentContext`。
 
 ## characterRegistry
 
@@ -343,8 +342,7 @@ openai-image-tavern-cache-v1:{userId}
           "imageTracks": {
             "currentContext": { "lastImage": {} },
             "lastReply": { "lastImage": {} },
-            "manualIntent": { "lastImage": {} },
-            "autoContext": { "lastImage": {} }
+            "manualIntent": { "lastImage": {} }
           },
           "autoTrigger": {
             "repliesSinceLastImage": 0,

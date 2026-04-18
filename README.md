@@ -185,12 +185,11 @@ GET  /api/plugins/openai-image-proxy/file?url=...
 
 ## 连贯性
 
-插件会为不同触发来源维护独立上一张图缓存：
+插件会按生图语义维护上一张图缓存：
 
-- `currentContext`：当前场景。
+- `currentContext`：当前场景，包含手动当前场景和自动触发。
 - `lastReply`：上一条回复。
 - `manualIntent`：输入框补充。
-- `autoContext`：自动触发。
 
 智能连贯性会默认继承上一张图的身份、服装、场景、光线、镜头和风格，只有明确改变地点、时间段、场景目标或可见角色时才判定转场。
 
