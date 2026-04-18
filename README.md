@@ -29,6 +29,10 @@ AI Image Tavern 是一个 SillyTavern 生图扩展，用于根据当前聊天上
 ├── manifest.json
 ├── index.js
 ├── style.css
+├── modules/
+│   ├── constants.js
+│   ├── utils.js
+│   └── cache-utils.js
 ├── server-plugin/
 │   └── openai-image-proxy/
 │       └── index.js

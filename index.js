@@ -3,46 +3,38 @@ import { getRequestHeaders, saveSettingsDebounced, eventSource, event_types, cha
 import { getCurrentUserHandle } from '/scripts/user.js';
 import { writeSecret } from '/scripts/secrets.js';
 import { power_user } from '/scripts/power-user.js';
+import {
+  BROWSER_SECRET_KEY,
+  CACHE_KEY,
+  DEBUG_LOG_KEY,
+  DEFAULT_SETTINGS,
+  EXTENSION_NAME,
+  IMAGE_SECRET_KEY,
+  PROMPT_BROWSER_SECRET_KEY,
+  PROMPT_SECRET_KEY,
+  PROXY_BASE,
+} from './modules/constants.js';
+import {
+  directJson,
+  escapeHtml,
+  extractChatCompletionContent,
+  hashText,
+  normalizeBaseUrl,
+  parseJsonObject,
+  stringifyChatCompletionContent,
+  stripHtml,
+  truncateText,
+} from './modules/utils.js';
+import {
+  CACHE_PLACEHOLDER_VALUES,
+  asStringArray,
+  cacheString,
+  isPlainObject,
+  meaningfulString,
+} from './modules/cache-utils.js';
 
-const EXTENSION_NAME = 'openai-image-tavern';
-const PROXY_BASE = '/api/plugins/openai-image-proxy';
-const CACHE_KEY = 'openai-image-tavern-cache-v1';
-const BROWSER_SECRET_KEY = 'openai-image-tavern-api-key-v1';
-const PROMPT_BROWSER_SECRET_KEY = 'openai-image-tavern-prompt-api-key-v1';
-const DEBUG_LOG_KEY = 'openai-image-tavern-debug-log-v1';
-const IMAGE_SECRET_KEY = 'openai_image_tavern_api_key';
-const PROMPT_SECRET_KEY = 'openai_image_tavern_prompt_api_key';
 let proxyAvailableCache = null;
 let activeMemoryTableKey = 'registry';
-
-const DEFAULT_SETTINGS = {
-  enabled: true,
-  baseUrl: '',
-  promptBaseUrl: '',
-  apiSecretId: '',
-  promptApiSecretId: '',
-  model: '',
-  promptModel: '',
-  size: '1024x1024',
-  n: 1,
-  responseFormat: 'url',
-  stylePreset: 'Japanese anime style, clean line art, expressive character design, vibrant colors, cinematic lighting',
-  safeMode: true,
-  keywordTriggers: '文生图,/image',
-  autoConfirmTagTrigger: true,
-  autoGenerateEnabled: false,
-  autoGenerateEveryReplies: 3,
-  useChatContext: true,
-  useCharacterCard: true,
-  continuityMode: 'smart',
-  updateContinuityCache: true,
-  detectSceneTransition: true,
-  panelExpanded: false,
-  contextDepth: 8,
-  maxCharacterText: 1600,
-  maxContextText: 2200,
-  visualProfiles: {},
-};
 let autoTriggerRunning = false;
 
 function settings() {
@@ -101,19 +93,6 @@ async function isProxyAvailable(force = false) {
     proxyAvailableCache = false;
   }
   return proxyAvailableCache;
-}
-
-function normalizeBaseUrl(baseUrl) {
-  return String(baseUrl || '').replace(/\/+$/, '');
-}
-
-async function directJson(url, options = {}) {
-  const response = await fetch(url, options);
-  const text = await response.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { error: text }; }
-  if (!response.ok) throw new Error(data?.error?.message || data?.error || text || `HTTP ${response.status}`);
-  return data;
 }
 
 function currentCharacterKey() {
@@ -194,27 +173,6 @@ function currentChatCompletionBaseUrl() {
   if (chatSettings.custom_url) return chatSettings.custom_url;
 
   return settings().promptBaseUrl || '';
-}
-
-function extractChatCompletionContent(data) {
-  if (typeof data === 'string') return data;
-  if (typeof data?.content === 'string') return data.content;
-  if (typeof data?.text === 'string') return data.text;
-  if (typeof data?.message === 'string') return data.message;
-  return data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || '';
-}
-
-function stringifyChatCompletionContent(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map(part => {
-      if (typeof part === 'string') return part;
-      if (typeof part?.text === 'string') return part.text;
-      if (typeof part?.content === 'string') return part.content;
-      return '';
-    }).filter(Boolean).join('\n');
-  }
-  return String(content || '');
 }
 
 function buildQuietPromptFromPayload(payload) {
@@ -403,16 +361,6 @@ function getChatCache() {
   if (!cache.users[userId].chats[chatId].imageTracks) cache.users[userId].chats[chatId].imageTracks = {};
   if (!cache.users[userId].chats[chatId].autoTrigger) cache.users[userId].chats[chatId].autoTrigger = emptyAutoTriggerCache();
   return { cache, userId, chatId, chatCache: cache.users[userId].chats[chatId] };
-}
-
-function hashText(value) {
-  const text = String(value || '');
-  let hash = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash << 5) - hash) + text.charCodeAt(index);
-    hash |= 0;
-  }
-  return String(hash >>> 0);
 }
 
 function imageTrackKey(triggerSource = 'current_scene', triggerType = '') {
@@ -1135,67 +1083,6 @@ function buildFallbackContinuityPlan(userPrompt, generationRequest) {
   };
 }
 
-const CACHE_PLACEHOLDER_VALUES = new Set([
-  'character_id',
-  'name',
-  'stable appearance only',
-  'negative constraints',
-  'current outfit',
-  'short current visual state',
-  'expression',
-  'pose/action',
-  'inferred location',
-  'inferred time',
-  'inferred weather',
-  'visual mood',
-  'camera/framing',
-  'one concise visual scene summary',
-  'final prompt or short prompt summary',
-  'visual summary of generated image target',
-  'identity anchor',
-  'outfit anchor',
-  'scene anchor',
-  'camera anchor',
-  'mood anchor',
-  'style anchor',
-  'scene id',
-  'iso time or empty',
-  'existing_or_new_character_id',
-  'final prompt summary',
-  'visual result summary',
-  'generate the current roleplay scene from the latest context.',
-  'generate the current roleplay scene from context.',
-  'generate the current scene from recent chat context.',
-]);
-
-function meaningfulString(value, maxLength = 0) {
-  const text = String(value || '').trim();
-  return maxLength ? truncateText(text, maxLength) : text;
-}
-
-function cacheString(value, maxLength = 0) {
-  const text = meaningfulString(value, maxLength);
-  if (!text) return '';
-  if (CACHE_PLACEHOLDER_VALUES.has(text.toLowerCase())) return '';
-  return text;
-}
-
-function asStringArray(value, maxItems = 12, itemMaxLength = 80) {
-  const list = Array.isArray(value)
-    ? value
-    : typeof value === 'string'
-      ? value.split(',')
-      : [];
-  return list
-    .map(item => cacheString(item, itemMaxLength))
-    .filter(Boolean)
-    .slice(0, maxItems);
-}
-
-function isPlainObject(value) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
 function hasMeaningfulScene(scene) {
   if (!scene || typeof scene !== 'object') return false;
   const summary = meaningfulString(scene.summary).toLowerCase();
@@ -1523,17 +1410,6 @@ function buildContinuityMessages(generationRequest) {
   ];
 }
 
-function parseJsonObject(text) {
-  const raw = String(text || '').trim();
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try { return JSON.parse(match[0]); } catch { return null; }
-  }
-}
-
 function normalizeContinuityPlan(plan, generationRequest, userPrompt) {
   const fallback = buildFallbackContinuityPlan(userPrompt, generationRequest);
   if (!plan || typeof plan !== 'object') return fallback;
@@ -1725,18 +1601,6 @@ async function composeImagePrompt(userPrompt, options = {}) {
     generationRequest,
     finalPrompt,
   };
-}
-
-function stripHtml(value) {
-  const div = document.createElement('div');
-  div.innerHTML = String(value || '');
-  return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim();
-}
-
-function truncateText(value, maxLength) {
-  const text = String(value || '').trim();
-  if (!maxLength || text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}...`;
 }
 
 function normalizePromptModel(model) {
@@ -1957,12 +1821,6 @@ function renderPreview(images) {
     const src = image.url || (image.b64_json ? `data:image/png;base64,${image.b64_json}` : '');
     return src ? `<img src="${escapeHtml(src)}" alt="生成图片">` : '';
   }).join('');
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
-  }[char]));
 }
 
 function renderCharacterRegistryRows(registry) {
