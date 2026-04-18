@@ -1,0 +1,10 @@
+{
+  "name": "openai-image-tavern",
+  "display_name": "AI Image Tavern",
+  "version": "0.1.0",
+  "author": "openai-image-tavern contributors",
+  "description": "适用于 SillyTavern 的上下文感知 OpenAI 兼容生图插件。",
+  "loading_order": 80,
+  "js": "index.js",
+  "css": "style.css"
+}
