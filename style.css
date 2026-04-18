@@ -320,6 +320,7 @@
   margin-top: 12px;
   max-width: 100%;
   overflow: auto;
+  min-height: 0;
   border: 1px solid var(--oit-border);
   border-radius: 12px;
   padding: 10px;
@@ -338,6 +339,7 @@
   align-items: center;
   justify-content: center;
   padding: 16px;
+  overflow: hidden;
   background: rgba(0, 0, 0, 0.42);
   box-sizing: border-box;
 }
@@ -345,6 +347,7 @@
 .oit-memory-drawer-content {
   width: min(1120px, calc(100vw - 32px));
   height: min(760px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -376,7 +379,10 @@
 
 #table_manager_container {
   width: 100%;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
 }
 
@@ -418,7 +424,8 @@
 
 #oit_table_content_container {
   max-width: 100%;
-  height: calc(100vh - 210px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   outline: 3px solid #41b681;
   border-radius: 3px;
@@ -537,8 +544,30 @@
 }
 
 @media (max-width: 720px) {
-  #oit_table_content_container {
-    height: calc(100vh - 190px);
+  #oit_table_database_settings_drawer {
+    align-items: flex-start;
+    justify-content: center;
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+    overflow: hidden;
+  }
+
+  .oit-memory-drawer-content {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+    max-height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+    border-radius: 10px;
+  }
+
+  .oit-memory-drawer-header {
+    padding: 8px 10px;
+  }
+
+  #oit_table_database_settings_drawer #oit_app_header_table_container {
+    overflow: hidden;
+  }
+
+  .oit-memory-inline {
+    padding: 6px;
   }
 
   #table_manager_container {
