@@ -2630,8 +2630,12 @@ async function syncVisualState(triggerSource = 'chat_context') {
     const continuityPlan = await requestContinuityPlan(generationRequest, 'Sync visual state');
     
     if (continuityPlan.updatedCache) {
-      saveReturnedCache(generationRequest); // 利用已有的逻辑保存 LLM 返回的 memoryOps
-      console.log('[OIT] 后台视觉状态同步完成');
+      saveReturnedCache(generationRequest); 
+      // 采集新规则：对比 LLM 的结果和原始文本，提取潜在的本地规则
+      if (continuityPlan.memoryOps) {
+        collectLearningCandidates(generationRequest.raw.recentMessages.slice(-1)[0]?.text || '', continuityPlan.memoryOps);
+      }
+      console.log('[OIT] 后台视觉状态同步完成并已记录学习候选词');
     }
   } catch (error) {
     console.warn('[OIT] 后台状态同步失败:', error);
@@ -2732,6 +2736,43 @@ async function maybeAutoGenerateAfterReply(message, messageId) {
     toastr.error(error.message, 'AI 生图插件');
   } finally {
     autoTriggerRunning = false;
+  }
+}
+
+function collectLearningCandidates(text, memoryOps) {
+  if (!text || text.length > 200 || !Array.isArray(memoryOps)) return;
+  
+  const learnedKey = 'openai-image-tavern-learned-rules-v1';
+  let learned = JSON.parse(localStorage.getItem(learnedKey) || '{}');
+  let changed = false;
+
+  memoryOps.forEach(op => {
+    if (op.op !== 'update' || !op.data) return;
+    
+    // 遍历 LLM 更新的每一个字段，寻找文本中包含的关键字
+    Object.entries(op.data).forEach(([field, value]) => {
+      if (typeof value !== 'string' || value.length < 2 || value.length > 20) return;
+      
+      // 如果文本包含 LLM 的值 (比如文本里写了“旗袍”，LLM 刚好把 outfit 改成“旗袍”)
+      if (text.includes(value)) {
+        // 如果本地映射里还没有这个词，这就是一个高价值的候选词！
+        if (!STATE_MAPPINGS[value]) {
+          learned[value] = {
+            table: op.table,
+            field: field,
+            value: value,
+            count: (learned[value]?.count || 0) + 1,
+            lastSeen: new Date().toISOString()
+          };
+          changed = true;
+          console.log(`[OIT-Learning] 发现新词候选: "${value}" -> ${op.table}.${field}`);
+        }
+      }
+    });
+  });
+
+  if (changed) {
+    localStorage.setItem(learnedKey, JSON.stringify(learned));
   }
 }
 
