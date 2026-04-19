@@ -32,11 +32,19 @@ import {
   isPlainObject,
   meaningfulString,
 } from './modules/cache-utils.js';
+import {
+  IDENTITY_PATTERNS,
+  STATE_MAPPINGS,
+  TRANSITION_INDICATORS,
+  VISUAL_TRIGGERS,
+} from './modules/perceiver-rules.js';
 
 let proxyAvailableCache = null;
 let activeMemoryTableKey = 'registry';
 let autoTriggerRunning = false;
 const processedTagMessageIds = new Set();
+let pendingSyncTimer = null;
+let memoizedImagePrompt = null;
 
 function settings() {
   if (!extension_settings[EXTENSION_NAME]) {
@@ -94,6 +102,23 @@ async function isProxyAvailable(force = false) {
     proxyAvailableCache = false;
   }
   return proxyAvailableCache;
+}
+
+function updateMemoizedPrompt() {
+  if (!settings().enabled || !settings().decoupledSync) return;
+  // 使用快照数据进行静默拼接
+  const userPrompt = 'Generate current scene'; 
+  const generationRequest = buildGenerationRequest(userPrompt, { triggerSource: 'current_scene' });
+  const continuityPlan = buildFallbackContinuityPlan(userPrompt, generationRequest);
+  
+  const rawPrompt = continuityPlan.finalPrompt || buildLocalPromptPreview(userPrompt, generationRequest, continuityPlan);
+  const continuityAnchor = buildContinuityAnchor(generationRequest, continuityPlan);
+  
+  memoizedImagePrompt = compactPromptText(continuityAnchor && continuityPlan.finalPrompt
+    ? `${continuityAnchor} ${rawPrompt}`
+    : rawPrompt);
+  
+  console.log('[OIT] 提示词已在后台预组装完成');
 }
 
 function currentCharacterKey() {
@@ -220,12 +245,21 @@ function getVisualProfile() {
   return s.visualProfiles[key];
 }
 
+let lastContextCache = { chatLength: -1, depth: -1, content: '' };
+
 function getRecentContext(depth = 8) {
-  return (chat || [])
+  if (lastContextCache.chatLength === (chat?.length || 0) && lastContextCache.depth === depth) {
+    return lastContextCache.content;
+  }
+  
+  const content = (chat || [])
     .slice(-depth)
     .filter((message) => !message?.extra?.openaiImageTavern)
     .map((message) => `${message.is_user ? 'User' : currentCharacterName()}: ${stripHtml(message.mes || '')}`)
     .join('\n');
+
+  lastContextCache = { chatLength: (chat?.length || 0), depth, content };
+  return content;
 }
 
 function getRecentMessages(depth = 8) {
@@ -1575,8 +1609,20 @@ async function requestContinuityPlan(generationRequest, userPrompt) {
 async function composeImagePrompt(userPrompt, options = {}) {
   await ensureMainCharacterAppearanceFromCard();
   const generationRequest = buildGenerationRequest(userPrompt, options);
+  
+  const s = settings();
+  let continuityPlan;
+  
+  // 如果开启了解耦同步，则优先读取内存中预组装好的 Prompt 快照
+  if (s.decoupledSync) {
+    if (!memoizedImagePrompt) updateMemoizedPrompt(); // 兜底：如果内存里还没生成，立即生成一个
+    return {
+      generationRequest,
+      finalPrompt: memoizedImagePrompt || buildLocalPromptPreview(userPrompt, generationRequest, buildFallbackContinuityPlan(userPrompt, generationRequest)),
+    };
+  }
+
   const continuityPlan = await requestContinuityPlan(generationRequest, userPrompt);
-  const rawPrompt = continuityPlan.finalPrompt || buildLocalPromptPreview(userPrompt, generationRequest, continuityPlan);
   const continuityAnchor = buildContinuityAnchor(generationRequest, continuityPlan);
   const finalPrompt = compactPromptText(continuityAnchor && continuityPlan.finalPrompt
     ? `${continuityAnchor} ${rawPrompt}`
@@ -2525,6 +2571,73 @@ function resolveMessageEvent(messageOrId) {
   return { messageId: -1, message: null };
 }
 
+function isComplexVisualChange(text) {
+  if (!text || text.length < 5) return false;
+  
+  // 1. 强制转场词：必须同步
+  if (TRANSITION_INDICATORS.some((indicator) => text.includes(indicator))) return true;
+  
+  // 2. 检查是否有视觉触发词
+  const triggers = VISUAL_TRIGGERS.filter((trigger) => text.includes(trigger));
+  if (triggers.length === 0) return false;
+
+  // 3. 核心优化：如果匹配到的触发词全部都在本地词典 (STATE_MAPPINGS) 中，
+  // 且句子不算太长（排除长段描写），则认为本地已处理，不需要 LLM。
+  const knownKeywords = Object.keys(STATE_MAPPINGS);
+  const unknownTriggers = triggers.filter(t => !knownKeywords.includes(t));
+  
+  // 如果存在词典外的触发词，或者句子很长（可能包含复杂动作描写），则认为复杂
+  return unknownTriggers.length > 0 || text.length > 80;
+}
+
+function applyLocalPerception(text, message) {
+  if (!text) return false;
+  let changed = false;
+  const { cache, userId, chatId, chatCache } = getChatCache();
+  
+  // 匹配状态映射词典
+  Object.entries(STATE_MAPPINGS).forEach(([keyword, mapping]) => {
+    if (text.includes(keyword)) {
+      if (mapping.table === 'scene') {
+        chatCache.scene[mapping.field] = mapping.value;
+        changed = true;
+      } else if (mapping.table === 'characters') {
+        // 推断目标角色 ID
+        const activeId = message?.is_user ? currentCharacterKey() : (currentCharacterKey() || 'active');
+        if (!chatCache.characters[activeId]) {
+           chatCache.characters[activeId] = { name: characters?.[this_chid]?.name || 'Character' };
+        }
+        chatCache.characters[activeId][mapping.field] = mapping.value;
+        changed = true;
+      }
+    }
+  });
+
+  if (changed) {
+    cache.users[userId].chats[chatId] = chatCache;
+    saveBrowserCache(cache);
+    console.log('[OIT] 本地感知已更新视觉状态:', text);
+  }
+  return changed;
+}
+
+async function syncVisualState(triggerSource = 'chat_context') {
+  if (!settings().enabled || !settings().decoupledSync) return;
+  
+  console.log('[OIT] 启动后台视觉状态同步...');
+  try {
+    const generationRequest = buildGenerationRequest('Sync state only', { triggerSource });
+    const continuityPlan = await requestContinuityPlan(generationRequest, 'Sync visual state');
+    
+    if (continuityPlan.updatedCache) {
+      saveReturnedCache(generationRequest); // 利用已有的逻辑保存 LLM 返回的 memoryOps
+      console.log('[OIT] 后台视觉状态同步完成');
+    }
+  } catch (error) {
+    console.warn('[OIT] 后台状态同步失败:', error);
+  }
+}
+
 async function onMessageRendered(messageOrId) {
   const s = settings();
   if (!s.enabled) return;
@@ -2540,6 +2653,32 @@ async function onMessageRendered(messageOrId) {
     }
     return;
   }
+
+  // 挂载底层感知引擎逻辑
+  if (s.decoupledSync) {
+    const text = stripHtml(message?.mes || '');
+    
+    // 1. 尝试本地精准替换
+    const localChanged = applyLocalPerception(text, message);
+    if (localChanged) updateMemoizedPrompt(); // 本地改完立即更新预生成的 Prompt
+
+    // 2. 判断是否包含本地无法处理的复杂视觉变动
+    const hasComplexChange = isComplexVisualChange(text);
+    
+    // 3. 严格防抖调度：2秒内没有新消息才启动异步 LLM 同步
+    if (hasComplexChange) {
+      if (pendingSyncTimer) clearTimeout(pendingSyncTimer);
+      console.log('[OIT] 检测到复杂视觉变化，已加入防抖同步队列...');
+      pendingSyncTimer = setTimeout(async () => {
+        await syncVisualState('chat_context');
+        updateMemoizedPrompt(); // LLM 同步完也要更新预生成的 Prompt
+        pendingSyncTimer = null;
+      }, 2000); 
+    } else if (localChanged) {
+      console.log('[OIT] 本地精准匹配成功，跳过 LLM 同步以节省 Token');
+    }
+  }
+
   await maybeAutoGenerateAfterReply(message, messageId);
 }
 
@@ -2627,6 +2766,7 @@ function addPanel() {
         </div>
         <div class="oit-checks">
           <label class="oit-switch"><input type="checkbox" id="oit-enabled" ${s.enabled ? 'checked' : ''}><span></span><b>启用插件</b></label>
+          <label class="oit-switch"><input type="checkbox" id="oit-decoupled-sync" ${s.decoupledSync ? 'checked' : ''}><span></span><b>解耦同步 (底层优化)</b></label>
           <label class="oit-switch"><input type="checkbox" id="oit-use-character" ${s.useCharacterCard ? 'checked' : ''}><span></span><b>读取角色卡</b></label>
           <label class="oit-switch"><input type="checkbox" id="oit-use-context" ${s.useChatContext ? 'checked' : ''}><span></span><b>使用上下文</b></label>
         </div>
@@ -2739,6 +2879,11 @@ function bindPanel() {
 
   document.querySelector('#oit-enabled')?.addEventListener('change', (event) => {
     s.enabled = event.target.checked;
+    saveSettings();
+  });
+
+  document.querySelector('#oit-decoupled-sync')?.addEventListener('change', (event) => {
+    s.decoupledSync = event.target.checked;
     saveSettings();
   });
 

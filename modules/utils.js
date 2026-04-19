@@ -2,12 +2,48 @@ export function normalizeBaseUrl(baseUrl) {
   return String(baseUrl || '').replace(/\/+$/, '');
 }
 
+function buildRequestError(message, extra = {}) {
+  const error = new Error(message || 'Request failed');
+  Object.assign(error, extra);
+  return error;
+}
+
 export async function directJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const { timeoutMs = 0, ...fetchOptions } = options || {};
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response;
+  try {
+    response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller ? controller.signal : fetchOptions.signal,
+    });
+  } catch (error) {
+    if (timeout) clearTimeout(timeout);
+    if (error?.name === 'AbortError') {
+      throw buildRequestError(`Request timeout after ${timeoutMs}ms`, {
+        code: 'ETIMEDOUT',
+        timeoutMs,
+        cause: error,
+      });
+    }
+    throw buildRequestError(error?.message || 'Network request failed', {
+      code: 'ENETWORK',
+      cause: error,
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   const text = await response.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text }; }
-  if (!response.ok) throw new Error(data?.error?.message || data?.error || text || `HTTP ${response.status}`);
+  if (!response.ok) {
+    throw buildRequestError(data?.error?.message || data?.error || text || `HTTP ${response.status}`, {
+      status: response.status,
+      statusText: response.statusText,
+      raw: data,
+    });
+  }
   return data;
 }
 

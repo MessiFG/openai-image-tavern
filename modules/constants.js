@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS = {
   useChatContext: true,
   useCharacterCard: true,
   continuityMode: 'smart',
+  decoupledSync: false,
   updateContinuityCache: true,
   detectSceneTransition: true,
   panelExpanded: false,
