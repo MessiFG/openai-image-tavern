@@ -77,8 +77,32 @@ function headers() {
   };
 }
 
+function redactProxyBody(body = {}) {
+  return {
+    ...body,
+    apiSecretId: body.apiSecretId ? '[set]' : '',
+    apiSecretKey: body.apiSecretKey ? '[set]' : '',
+  };
+}
+
+function summarizeProxyResponse(data) {
+  if (data === null || data === undefined) return '';
+  if (typeof data === 'string') return truncateText(data, 400);
+  try {
+    return truncateText(JSON.stringify(data), 400);
+  } catch {
+    return String(data);
+  }
+}
+
 async function proxyPost(path, body) {
-  const response = await fetch(`${PROXY_BASE}${path}`, {
+  const url = `${PROXY_BASE}${path}`;
+  console.info('[openai-image-tavern] proxy request', {
+    url,
+    path,
+    body: redactProxyBody(body),
+  });
+  const response = await fetch(url, {
     method: 'POST',
     headers: headers(),
     body: JSON.stringify(body),
@@ -86,7 +110,23 @@ async function proxyPost(path, body) {
   const text = await response.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text }; }
-  if (!response.ok) throw new Error(data?.error?.message || data?.error || text || `HTTP ${response.status}`);
+  console.info('[openai-image-tavern] proxy response', {
+    url,
+    path,
+    status: response.status,
+    ok: response.ok,
+    summary: summarizeProxyResponse(data),
+  });
+  if (!response.ok) {
+    console.error('[openai-image-tavern] proxy error', {
+      url,
+      path,
+      status: response.status,
+      body: redactProxyBody(body),
+      response: data,
+    });
+    throw new Error(data?.error?.message || data?.error || text || `HTTP ${response.status}`);
+  }
   return data;
 }
 
@@ -1609,10 +1649,9 @@ async function requestContinuityPlan(generationRequest, userPrompt) {
 async function composeImagePrompt(userPrompt, options = {}) {
   await ensureMainCharacterAppearanceFromCard();
   const generationRequest = buildGenerationRequest(userPrompt, options);
-  
+
   const s = settings();
-  let continuityPlan;
-  
+
   // 如果开启了解耦同步，则优先读取内存中预组装好的 Prompt 快照
   if (s.decoupledSync) {
     if (!memoizedImagePrompt) updateMemoizedPrompt(); // 兜底：如果内存里还没生成，立即生成一个
@@ -1624,6 +1663,7 @@ async function composeImagePrompt(userPrompt, options = {}) {
 
   const continuityPlan = await requestContinuityPlan(generationRequest, userPrompt);
   const continuityAnchor = buildContinuityAnchor(generationRequest, continuityPlan);
+  const rawPrompt = continuityPlan.finalPrompt || buildLocalPromptPreview(userPrompt, generationRequest, continuityPlan);
   const finalPrompt = compactPromptText(continuityAnchor && continuityPlan.finalPrompt
     ? `${continuityAnchor} ${rawPrompt}`
     : rawPrompt);
@@ -1720,9 +1760,39 @@ async function proxyGenerateImage(prompt, options = {}) {
 }
 
 function validateProviderSettings(s) {
+  syncProviderInputs();
+  const modelSelect = document.querySelector('#oit-model-select');
+  if (!String(s.model || '').trim() && modelSelect?.value) {
+    s.model = String(modelSelect.value || '').trim();
+  }
+  appendDebugLog('图片配置校验', {
+    baseUrl: s.baseUrl,
+    hasApiSecretId: Boolean(s.apiSecretId),
+    hasBrowserApiKey: Boolean(getBrowserApiKey()),
+    model: s.model || '',
+    modelInput: String(document.querySelector('#oit-model')?.value || '').trim(),
+    modelSelect: String(modelSelect?.value || '').trim(),
+  });
   if (!String(s.baseUrl || '').trim()) throw new Error('请先填写图片接口地址');
   if (!String(s.apiSecretId || getBrowserApiKey()).trim()) throw new Error('请先保存 API 密钥');
   if (!String(s.model || '').trim()) throw new Error('请先填写图片模型');
+}
+
+function syncProviderInputs() {
+  const s = settings();
+  const modelInput = document.querySelector('#oit-model');
+  const promptModelInput = document.querySelector('#oit-prompt-model');
+  const baseUrlInput = document.querySelector('#oit-base-url');
+  const promptBaseUrlInput = document.querySelector('#oit-prompt-base-url');
+  const sizeInput = document.querySelector('#oit-size');
+  const responseInput = document.querySelector('#oit-response');
+
+  if (modelInput) s.model = String(modelInput.value || '').trim();
+  if (promptModelInput) s.promptModel = String(promptModelInput.value || '').trim();
+  if (baseUrlInput) s.baseUrl = String(baseUrlInput.value || '').trim();
+  if (promptBaseUrlInput) s.promptBaseUrl = String(promptBaseUrlInput.value || '').trim();
+  if (sizeInput) s.size = String(sizeInput.value || '').trim();
+  if (responseInput) s.responseFormat = String(responseInput.value || '').trim();
 }
 
 async function shouldUseProxy(s = settings()) {
@@ -1904,6 +1974,8 @@ async function insertImages(images, prompt, options = {}) {
 
 async function handleGenerate(prompt, options = {}) {
   if (!prompt?.trim()) throw new Error('提示词为空');
+  syncProviderInputs();
+  saveSettings();
   await cleanupLegacyGeneratedMedia();
   const result = await generateImage(prompt.trim(), options);
   const images = result.images || [];
@@ -2851,6 +2923,8 @@ function addPanel() {
         <div class="oit-actions">
           <button id="oit-save-api-key" class="menu_button"><i class="fa-solid fa-lock"></i> 保存图片密钥</button>
           <button id="oit-save-prompt-api-key" class="menu_button"><i class="fa-solid fa-key"></i> 保存补全密钥</button>
+          <button id="oit-save-model" class="menu_button"><i class="fa-solid fa-floppy-disk"></i> 保存图片模型</button>
+          <button id="oit-save-prompt-model" class="menu_button"><i class="fa-solid fa-floppy-disk"></i> 保存补全模型</button>
           <button id="oit-refresh-models" class="menu_button"><i class="fa-solid fa-rotate"></i> 刷新模型</button>
         </div>
       </details>
@@ -2903,15 +2977,25 @@ function addPanel() {
 }
 
 function bindPanel() {
-  const s = settings();
+  const updateSetting = (key, value) => {
+    const current = settings();
+    current[key] = value;
+    saveSettings();
+    return current;
+  };
+
   const bindValue = (selector, key) => {
-    document.querySelector(selector)?.addEventListener('change', (event) => {
-      s[key] = event.target.value;
-      saveSettings();
-    });
+    const element = document.querySelector(selector);
+    if (!element) return;
+    const persist = (event) => {
+      updateSetting(key, event.target.value);
+    };
+    element.addEventListener('input', persist);
+    element.addEventListener('change', persist);
   };
 
   document.querySelector('#oit-panel-toggle')?.addEventListener('click', () => {
+    const s = settings();
     s.panelExpanded = !s.panelExpanded;
     saveSettings();
     document.querySelector('#openai-image-tavern-panel')?.classList.toggle('expanded', s.panelExpanded);
@@ -2919,23 +3003,19 @@ function bindPanel() {
   });
 
   document.querySelector('#oit-enabled')?.addEventListener('change', (event) => {
-    s.enabled = event.target.checked;
-    saveSettings();
+    updateSetting('enabled', event.target.checked);
   });
 
   document.querySelector('#oit-decoupled-sync')?.addEventListener('change', (event) => {
-    s.decoupledSync = event.target.checked;
-    saveSettings();
+    updateSetting('decoupledSync', event.target.checked);
   });
 
   document.querySelector('#oit-use-character')?.addEventListener('change', (event) => {
-    s.useCharacterCard = event.target.checked;
-    saveSettings();
+    updateSetting('useCharacterCard', event.target.checked);
   });
 
   document.querySelector('#oit-use-context')?.addEventListener('change', (event) => {
-    s.useChatContext = event.target.checked;
-    saveSettings();
+    updateSetting('useChatContext', event.target.checked);
   });
 
   bindValue('#oit-base-url', 'baseUrl');
@@ -2948,36 +3028,31 @@ function bindPanel() {
   bindValue('#oit-continuity-mode', 'continuityMode');
 
   document.querySelector('#oit-update-continuity')?.addEventListener('change', (event) => {
-    s.updateContinuityCache = event.target.value === 'true';
-    saveSettings();
+    updateSetting('updateContinuityCache', event.target.value === 'true');
   });
 
   document.querySelector('#oit-detect-transition')?.addEventListener('change', (event) => {
-    s.detectSceneTransition = event.target.checked;
-    saveSettings();
+    updateSetting('detectSceneTransition', event.target.checked);
   });
 
   document.querySelector('#oit-safe-mode')?.addEventListener('change', (event) => {
-    s.safeMode = event.target.checked;
-    saveSettings();
+    updateSetting('safeMode', event.target.checked);
   });
 
   document.querySelector('#oit-auto-generate')?.addEventListener('change', (event) => {
-    s.autoGenerateEnabled = event.target.checked;
-    saveSettings();
+    updateSetting('autoGenerateEnabled', event.target.checked);
   });
 
   document.querySelector('#oit-auto-replies')?.addEventListener('change', (event) => {
-    s.autoGenerateEveryReplies = Math.max(1, Number(event.target.value || 3));
-    event.target.value = String(s.autoGenerateEveryReplies);
-    saveSettings();
+    const value = Math.max(1, Number(event.target.value || 3));
+    event.target.value = String(value);
+    updateSetting('autoGenerateEveryReplies', value);
   });
 
   document.querySelector('#oit-model-select')?.addEventListener('change', (event) => {
     if (!event.target.value) return;
-    s.model = event.target.value;
+    updateSetting('model', event.target.value);
     document.querySelector('#oit-model').value = event.target.value;
-    saveSettings();
   });
 
   document.querySelector('#oit-clear-character-cache')?.addEventListener('click', () => {
@@ -3041,9 +3116,21 @@ function bindPanel() {
     }
   });
 
+  document.querySelector('#oit-save-model')?.addEventListener('click', () => {
+    updateSetting('model', String(document.querySelector('#oit-model')?.value || '').trim());
+    toastr.success('图片模型已保存', 'AI 生图插件');
+  });
+
+  document.querySelector('#oit-save-prompt-model')?.addEventListener('click', () => {
+    updateSetting('promptModel', String(document.querySelector('#oit-prompt-model')?.value || '').trim());
+    toastr.success('补全模型已保存', 'AI 生图插件');
+  });
+
   document.querySelector('#oit-generate')?.addEventListener('click', async () => {
     const prompt = document.querySelector('#oit-prompt')?.value || '';
     try {
+      syncProviderInputs();
+      saveSettings();
       await handleGenerate(prompt, { triggerType: 'manual_input', triggerSource: 'user_intent' });
       toastr.success('图片已生成', 'AI 生图插件');
     } catch (error) {
@@ -3053,6 +3140,8 @@ function bindPanel() {
 
   document.querySelector('#oit-generate-current')?.addEventListener('click', async () => {
     try {
+      syncProviderInputs();
+      saveSettings();
       await handleGenerate('Generate the current roleplay scene from the latest context.', {
         triggerType: 'manual_menu',
         triggerSource: 'current_scene',
@@ -3066,6 +3155,8 @@ function bindPanel() {
   document.querySelector('#oit-generate-last')?.addEventListener('click', async () => {
     const last = getLastAssistantMessageInfo();
     try {
+      syncProviderInputs();
+      saveSettings();
       await handleGenerate(last.text || 'Generate the latest character action from recent context.', {
         triggerType: 'manual_menu',
         triggerSource: 'last_reply',

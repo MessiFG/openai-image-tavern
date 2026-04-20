@@ -98,6 +98,27 @@ function sameOrigin(req) {
   return `${proto}://${host}`;
 }
 
+function redactConfig(config = {}) {
+  return {
+    ...config,
+    apiKey: config.apiKey ? '[set]' : '',
+  };
+}
+
+function summarizePayload(payload) {
+  if (payload === null || payload === undefined) return '';
+  if (typeof payload === 'string') return payload.slice(0, 400);
+  try {
+    return JSON.stringify(payload).slice(0, 400);
+  } catch {
+    return String(payload);
+  }
+}
+
+function logProxy(stage, details = {}) {
+  console.info(`[openai-image-proxy] ${stage}`, details);
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -114,15 +135,28 @@ async function proxyModels(req, res) {
     const root = normalizeBaseUrl(config.baseUrl);
     if (!root) return res.status(400).json({ error: 'baseUrl is required' });
     if (!config.apiKey) return res.status(400).json({ error: 'api key is required' });
+    const upstreamUrl = `${root}/v1/models`;
+    logProxy('proxyModels request', {
+      root,
+      upstreamUrl,
+      config: redactConfig(config),
+    });
 
-    const upstream = await fetchWithTimeout(`${root}/v1/models`, {
+    const upstream = await fetchWithTimeout(upstreamUrl, {
       method: 'GET',
       headers: buildHeaders(config.apiKey),
     }, 30000);
 
     const data = await readJsonOrText(upstream);
+    logProxy('proxyModels response', {
+      upstreamUrl,
+      status: upstream.status,
+      ok: upstream.ok,
+      body: summarizePayload(data),
+    });
     res.status(upstream.status).json(normalizeModels(data));
   } catch (error) {
+    console.error('[openai-image-proxy] proxyModels error', error);
     res.status(500).json({ error: error.message || String(error) });
   }
 }
@@ -135,8 +169,15 @@ async function proxyChatCompletions(req, res) {
     if (!root) return res.status(400).json({ error: 'baseUrl is required' });
     if (!config.apiKey) return res.status(400).json({ error: 'api key is required' });
     if (!body.payload || typeof body.payload !== 'object') return res.status(400).json({ error: 'payload is required' });
+    const upstreamUrl = `${root}/v1/chat/completions`;
+    logProxy('proxyChatCompletions request', {
+      root,
+      upstreamUrl,
+      config: redactConfig(config),
+      payload: summarizePayload(body.payload),
+    });
 
-    const upstream = await fetchWithTimeout(`${root}/v1/chat/completions`, {
+    const upstream = await fetchWithTimeout(upstreamUrl, {
       method: 'POST',
       headers: {
         ...buildHeaders(config.apiKey),
@@ -146,8 +187,15 @@ async function proxyChatCompletions(req, res) {
     }, Number(body.timeoutMs || 60000));
 
     const data = await readJsonOrText(upstream);
+    logProxy('proxyChatCompletions response', {
+      upstreamUrl,
+      status: upstream.status,
+      ok: upstream.ok,
+      body: summarizePayload(data),
+    });
     res.status(upstream.status).json(data);
   } catch (error) {
+    console.error('[openai-image-proxy] proxyChatCompletions error', error);
     res.status(500).json({ error: error.message || String(error) });
   }
 }
@@ -160,8 +208,15 @@ async function proxyImageGenerations(req, res) {
     if (!root) return res.status(400).json({ error: 'baseUrl is required' });
     if (!config.apiKey) return res.status(400).json({ error: 'api key is required' });
     if (!body.payload || typeof body.payload !== 'object') return res.status(400).json({ error: 'payload is required' });
+    const upstreamUrl = `${root}/v1/images/generations`;
+    logProxy('proxyImageGenerations request', {
+      root,
+      upstreamUrl,
+      config: redactConfig(config),
+      payload: summarizePayload(body.payload),
+    });
 
-    const upstream = await fetchWithTimeout(`${root}/v1/images/generations`, {
+    const upstream = await fetchWithTimeout(upstreamUrl, {
       method: 'POST',
       headers: {
         ...buildHeaders(config.apiKey),
@@ -171,6 +226,12 @@ async function proxyImageGenerations(req, res) {
     }, Number(body.timeoutMs || DEFAULT_TIMEOUT_MS));
 
     const data = await readJsonOrText(upstream);
+    logProxy('proxyImageGenerations response', {
+      upstreamUrl,
+      status: upstream.status,
+      ok: upstream.ok,
+      body: summarizePayload(data),
+    });
     if (!upstream.ok) {
       return res.status(upstream.status).json({
         error: extractErrorMessage(data),
@@ -183,6 +244,7 @@ async function proxyImageGenerations(req, res) {
       raw: data,
     });
   } catch (error) {
+    console.error('[openai-image-proxy] proxyImageGenerations error', error);
     res.status(500).json({ error: error.message || String(error) });
   }
 }
@@ -215,8 +277,15 @@ async function proxyGenerate(req, res) {
         payload[key] = body.extra[key];
       }
     }
+    const upstreamUrl = `${root}/v1/images/generations`;
+    logProxy('proxyGenerate request', {
+      root,
+      upstreamUrl,
+      config: redactConfig(config),
+      payload: summarizePayload(payload),
+    });
 
-    const upstream = await fetchWithTimeout(`${root}/v1/images/generations`, {
+    const upstream = await fetchWithTimeout(upstreamUrl, {
       method: 'POST',
       headers: {
         ...buildHeaders(config.apiKey),
@@ -226,6 +295,12 @@ async function proxyGenerate(req, res) {
     }, Number(body.timeoutMs || DEFAULT_TIMEOUT_MS));
 
     const data = await readJsonOrText(upstream);
+    logProxy('proxyGenerate response', {
+      upstreamUrl,
+      status: upstream.status,
+      ok: upstream.ok,
+      body: summarizePayload(data),
+    });
     if (!upstream.ok) {
       return res.status(upstream.status).json({
         error: extractErrorMessage(data),
@@ -239,6 +314,7 @@ async function proxyGenerate(req, res) {
       generationRequest,
     });
   } catch (error) {
+    console.error('[openai-image-proxy] proxyGenerate error', error);
     res.status(500).json({ error: error.message || String(error) });
   }
 }
